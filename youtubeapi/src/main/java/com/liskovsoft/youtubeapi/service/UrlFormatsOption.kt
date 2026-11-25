@@ -16,4 +16,26 @@ object UrlFormatsOption {
     @JvmStatic
     @Volatile
     var listener: ((String, Boolean, Long) -> Unit)? = null
+
+    /**
+     * The URL client gets this long, then the normal client chain is used
+     */
+    @JvmStatic
+    @Volatile
+    var timeoutMs: Long = 7_000
+
+    /**
+     * Recent/prefetched player data is reused for this long (the media URLs stay valid for hours)
+     */
+    @JvmStatic
+    @Volatile
+    var recentTtlMs: Long = 20 * 60 * 1000L
+
+    /**
+     * Fetches the player data of a likely next video in the background (blocking: call off the main thread)
+     */
+    @JvmStatic
+    fun prefetch(videoId: String) {
+        com.liskovsoft.youtubeapi.service.internal.FormatInfoWrapper.prefetch(videoId)
+    }
 }

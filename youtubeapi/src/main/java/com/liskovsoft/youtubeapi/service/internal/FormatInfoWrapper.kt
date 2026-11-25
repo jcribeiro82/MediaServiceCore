@@ -43,6 +43,13 @@ internal object FormatInfoWrapper {
     private val URL_CLIENT = Pair(AppClient.ANDROID_VR, ProviderType.LEGACY)
     private var mUrlClientVideoId: String? = null // the current video came from URL_CLIENT
     private var mUrlClientSkipVideoId: String? = null // URL_CLIENT failed to play this video: normal chain
+    private var mUrlClientFailures = 0 // in a row
+    private var mUrlClientPausedUntilMs = 0L // too many failures: normal chain for a while
+    // SmartTubeKids: recent and prefetched player data from URL_CLIENT (videoId -> time, info)
+    private val mRecent = object : LinkedHashMap<String, Pair<Long, MediaItemFormatInfo>>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, MediaItemFormatInfo>>?) = size > 6
+    }
+    private val mUrlClientExecutor = java.util.concurrent.Executors.newCachedThreadPool()
     private var mActualClient: Pair<AppClient, ProviderType>? = null
     private var mNextClient: Pair<AppClient, ProviderType>? = null
     private var mIsUnplayable: Boolean = false
@@ -65,7 +72,7 @@ internal object FormatInfoWrapper {
                 checkSigned()
 
                 val urlInfo = if (UrlFormatsOption.isEnabled && videoId != mUrlClientSkipVideoId)
-                    urlFormatsInfo(videoId, clickTrackingParams) else null
+                    recentInfo(videoId) ?: urlFormatsInfo(videoId, clickTrackingParams, false) else null
                 mUrlClientVideoId = if (urlInfo != null) videoId else null
                 val formatInfo = urlInfo ?: firstPlayable(videoId, clickTrackingParams)
 
@@ -84,6 +91,7 @@ internal object FormatInfoWrapper {
     fun switchNextClient(force: Boolean) {
         // SmartTubeKids: a playback error with the URL client: retry this video with the normal client chain
         if (mUrlClientVideoId != null) {
+            mRecent.remove(mUrlClientVideoId!!)
             mUrlClientSkipVideoId = mUrlClientVideoId
             mUrlClientVideoId = null
             mCachedFormatInfo = null
@@ -142,19 +150,72 @@ internal object FormatInfoWrapper {
     }
 
     /**
-     * SmartTubeKids: ANDROID_VR usually answers with plain URLs (no PoToken, no JS challenge). Null if it fails.
+     * SmartTubeKids: ANDROID_VR usually answers with plain URLs (no PoToken, no JS challenge). Null if it fails,
+     * answers too slowly ({@link UrlFormatsOption#timeoutMs}) or keeps failing (then paused for a while).
      */
-    private fun urlFormatsInfo(videoId: String, clickTrackingParams: String?): MediaItemFormatInfo? {
+    private fun urlFormatsInfo(videoId: String, clickTrackingParams: String?, prefetch: Boolean): MediaItemFormatInfo? {
+        if (System.currentTimeMillis() < mUrlClientPausedUntilMs) {
+            return null
+        }
         val start = System.currentTimeMillis()
         val result = try {
             AppService.instance().resetClientPlaybackNonce()
-            getProvider(URL_CLIENT)(URL_CLIENT.first, videoId, clickTrackingParams)
+            val future = mUrlClientExecutor.submit<MediaItemFormatInfo?> {
+                getProvider(URL_CLIENT)(URL_CLIENT.first, videoId, clickTrackingParams)
+            }
+            future.get(UrlFormatsOption.timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            UrlFormatsOption.listener?.invoke(URL_CLIENT.first.name + " timeout", false, System.currentTimeMillis() - start)
+            null
         } catch (e: Exception) {
             null
         }
         val hasUrls = result != null && !result.isUnplayable() && (result.containsDashFormats() || result.containsUrlFormats())
-        UrlFormatsOption.listener?.invoke(URL_CLIENT.first.name, hasUrls, System.currentTimeMillis() - start)
+        UrlFormatsOption.listener?.invoke(URL_CLIENT.first.name + (if (prefetch) " prefetch" else ""), hasUrls,
+            System.currentTimeMillis() - start)
+        if (hasUrls) {
+            mUrlClientFailures = 0
+            mRecent[videoId] = Pair(System.currentTimeMillis(), result!!)
+        } else if (++mUrlClientFailures >= 3) {
+            mUrlClientFailures = 0
+            mUrlClientPausedUntilMs = System.currentTimeMillis() + 30 * 60 * 1000L
+            UrlFormatsOption.listener?.invoke(URL_CLIENT.first.name + " paused 30 min (3 failures)", false, 0)
+        }
         return if (hasUrls) result else null
+    }
+
+    /**
+     * SmartTubeKids: player data fetched (or prefetched) in the last minutes for this video
+     */
+    private fun recentInfo(videoId: String): MediaItemFormatInfo? {
+        val entry = mRecent[videoId] ?: return null
+        if (System.currentTimeMillis() - entry.first > UrlFormatsOption.recentTtlMs) {
+            mRecent.remove(videoId)
+            return null
+        }
+        UrlFormatsOption.listener?.invoke(URL_CLIENT.first.name + " recent/prefetched", true, 0)
+        return entry.second
+    }
+
+    /**
+     * SmartTubeKids: fetches the player data of a likely next video in the background (URL client only)
+     */
+    @JvmStatic
+    fun prefetch(videoId: String) {
+        if (!UrlFormatsOption.isEnabled) {
+            return
+        }
+        synchronized(lock) {
+            if (videoId == mUrlClientSkipVideoId || getCachedFormatInfo(videoId) != null || recentInfoQuiet(videoId)) {
+                return
+            }
+            urlFormatsInfo(videoId, null, true)
+        }
+    }
+
+    private fun recentInfoQuiet(videoId: String): Boolean {
+        val entry = mRecent[videoId] ?: return false
+        return System.currentTimeMillis() - entry.first <= UrlFormatsOption.recentTtlMs
     }
 
     private fun firstPlayable(videoId: String, clickTrackingParams: String?): MediaItemFormatInfo? {

@@ -70,12 +70,18 @@ internal object PoTokenGate {
     @JvmStatic
     @JvmOverloads
     fun getPoToken(client: AppClient, videoId: String? = null): String? {
+        val start = System.currentTimeMillis()
         releaseOtherProviders(client)
-        return when {
+        val result = when {
             client.isWebPotRequired -> if (videoId != null) getWebContentPoToken(videoId) else getWebSessionPoToken()
             client.isTvPotRequired -> getTvPoToken()
             else -> null
         }
+        if (com.liskovsoft.youtubeapi.service.PlayerDataTrace.isEnabled && (result != null || System.currentTimeMillis() - start > 20)) {
+            com.liskovsoft.youtubeapi.service.PlayerDataTrace.log("PoToken ${client.name}: ${System.currentTimeMillis() - start} ms" +
+                if (result == null) " (none)" else "")
+        }
+        return result
     }
 
     @JvmStatic

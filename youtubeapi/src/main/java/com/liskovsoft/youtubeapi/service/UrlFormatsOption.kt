@@ -22,7 +22,7 @@ object UrlFormatsOption {
      */
     @JvmStatic
     @Volatile
-    var timeoutMs: Long = 7_000
+    var timeoutMs: Long = 5_000
 
     /**
      * Recent/prefetched player data is reused for this long (the media URLs stay valid for hours)

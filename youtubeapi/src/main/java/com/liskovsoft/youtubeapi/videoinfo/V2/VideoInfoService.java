@@ -100,8 +100,14 @@ public class VideoInfoService extends VideoInfoServiceBase {
         if (client == AppClient.INITIAL) {
             result = InitialResponseService.getVideoInfo(videoId, client.isAuthSupported() && mUseAuth);
         } else {
+            long start = System.currentTimeMillis();
             String videoInfoQuery = VideoInfoApiHelper.getVideoInfoQuery(client, videoId, clickTrackingParams);
+            long queryMs = System.currentTimeMillis() - start;
             result = getVideoInfo(client, videoInfoQuery);
+            if (com.liskovsoft.youtubeapi.service.PlayerDataTrace.isEnabled()) {
+                com.liskovsoft.youtubeapi.service.PlayerDataTrace.log(client.name() + " request: query " + queryMs + " ms, network " +
+                        (System.currentTimeMillis() - start - queryMs) + " ms");
+            }
         }
 
         if (result != null) {

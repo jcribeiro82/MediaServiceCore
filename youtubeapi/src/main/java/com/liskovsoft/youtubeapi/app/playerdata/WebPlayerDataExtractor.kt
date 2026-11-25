@@ -28,16 +28,20 @@ internal class WebPlayerDataExtractor(override val playerUrl: String): PlayerDat
     }
 
     init {
+        val start = System.currentTimeMillis()
         // Get the code from the cache
         restoreAllData()
         checkSigData()
         checkCpnData()
 
+        val cached = signatureTimestamp != null
         if (signatureTimestamp == null) {
             fetchAllData()
             checkCpnData()
             persistAllData()
         }
+        com.liskovsoft.youtubeapi.service.PlayerDataTrace.log("player JS ready in ${System.currentTimeMillis() - start} ms" +
+            (if (cached) " (from cache)" else " (downloaded)"))
     }
 
     override fun extractNSig(nParam: String): String? {
@@ -106,7 +110,10 @@ internal class WebPlayerDataExtractor(override val playerUrl: String): PlayerDat
             JsChallengeRequest(JsChallengeType.SIG, ChallengeInput(fixedPlayerUrl, it))
         }
 
+        val solveStart = System.currentTimeMillis()
         val result = V8ChallengeProvider.bulkSolve(listOfNotNull(nRequest, sRequest))
+        com.liskovsoft.youtubeapi.service.PlayerDataTrace.log("n/sig challenges (${nRequest?.input?.challenges?.size ?: 0} n, " +
+            "${sRequest?.input?.challenges?.size ?: 0} sig) solved in ${System.currentTimeMillis() - solveStart} ms")
 
         for (item in result) {
             when (item.response?.type) {

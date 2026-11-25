@@ -8,6 +8,7 @@ import com.liskovsoft.youtubeapi.app.PoTokenGate
 import com.liskovsoft.youtubeapi.app.ReloadPlaybackGate
 import com.liskovsoft.youtubeapi.common.helpers.AppClient
 import com.liskovsoft.youtubeapi.innertube.InnertubeService
+import com.liskovsoft.youtubeapi.service.UrlFormatsOption
 import com.liskovsoft.youtubeapi.service.YouTubeSignInService
 import com.liskovsoft.youtubeapi.service.data.YouTubeMediaItemFormatInfo
 import com.liskovsoft.youtubeapi.videoinfo.V2.VideoInfoService
@@ -38,6 +39,10 @@ internal object FormatInfoWrapper {
         //AppClient.TV_SIMPLY, // hangs?
         //AppClient.ANDROID_SDK_LESS, // doesn't require pot (hangs on Cronet!)
     )
+    // SmartTubeKids: see UrlFormatsOption (off by default)
+    private val URL_CLIENT = Pair(AppClient.ANDROID_VR, ProviderType.LEGACY)
+    private var mUrlClientVideoId: String? = null // the current video came from URL_CLIENT
+    private var mUrlClientSkipVideoId: String? = null // URL_CLIENT failed to play this video: normal chain
     private var mActualClient: Pair<AppClient, ProviderType>? = null
     private var mNextClient: Pair<AppClient, ProviderType>? = null
     private var mIsUnplayable: Boolean = false
@@ -59,7 +64,10 @@ internal object FormatInfoWrapper {
 
                 checkSigned()
 
-                val formatInfo = firstPlayable(videoId, clickTrackingParams)
+                val urlInfo = if (UrlFormatsOption.isEnabled && videoId != mUrlClientSkipVideoId)
+                    urlFormatsInfo(videoId, clickTrackingParams) else null
+                mUrlClientVideoId = if (urlInfo != null) videoId else null
+                val formatInfo = urlInfo ?: firstPlayable(videoId, clickTrackingParams)
 
                 mIsUnplayable = formatInfo?.isUnplayable ?: true
 
@@ -74,6 +82,15 @@ internal object FormatInfoWrapper {
 
     @JvmStatic
     fun switchNextClient(force: Boolean) {
+        // SmartTubeKids: a playback error with the URL client: retry this video with the normal client chain
+        if (mUrlClientVideoId != null) {
+            mUrlClientSkipVideoId = mUrlClientVideoId
+            mUrlClientVideoId = null
+            mCachedFormatInfo = null
+            UrlFormatsOption.listener?.invoke(URL_CLIENT.first.name + " playback error", false, 0)
+            return
+        }
+
         // Try to reset pot cache for the last video
         if (!force && !mIsUnplayable && (mActualClient?.let { PoTokenGate.resetCache(it.first) } ?: false)) {
             return
@@ -122,6 +139,22 @@ internal object FormatInfoWrapper {
 
     private fun shouldBeSynced(formatInfo: MediaItemFormatInfo): Boolean {
         return !formatInfo.isAuth() && !formatInfo.isUnplayable() && getSignInService().isSigned
+    }
+
+    /**
+     * SmartTubeKids: ANDROID_VR usually answers with plain URLs (no PoToken, no JS challenge). Null if it fails.
+     */
+    private fun urlFormatsInfo(videoId: String, clickTrackingParams: String?): MediaItemFormatInfo? {
+        val start = System.currentTimeMillis()
+        val result = try {
+            AppService.instance().resetClientPlaybackNonce()
+            getProvider(URL_CLIENT)(URL_CLIENT.first, videoId, clickTrackingParams)
+        } catch (e: Exception) {
+            null
+        }
+        val hasUrls = result != null && !result.isUnplayable() && (result.containsDashFormats() || result.containsUrlFormats())
+        UrlFormatsOption.listener?.invoke(URL_CLIENT.first.name, hasUrls, System.currentTimeMillis() - start)
+        return if (hasUrls) result else null
     }
 
     private fun firstPlayable(videoId: String, clickTrackingParams: String?): MediaItemFormatInfo? {

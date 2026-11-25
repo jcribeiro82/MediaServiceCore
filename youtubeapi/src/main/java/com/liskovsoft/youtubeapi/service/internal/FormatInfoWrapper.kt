@@ -43,9 +43,9 @@ internal object FormatInfoWrapper {
     // the first one that does is kept for the session.
     private val URL_CLIENT = Pair(AppClient.ANDROID_VR, ProviderType.LEGACY)
     private val URL_CLIENTS = arrayOf(
+        Pair(AppClient.ANDROID, ProviderType.LEGACY), // direct URLs on the Alcatel Pixi 3 (Android 5) in 2026-11
         URL_CLIENT,
         Pair(AppClient.IOS, ProviderType.LEGACY),
-        Pair(AppClient.ANDROID, ProviderType.LEGACY),
         Pair(AppClient.MWEB, ProviderType.LEGACY),
         Pair(AppClient.TV_EMBED, ProviderType.LEGACY),
         Pair(AppClient.WEB_EMBED, ProviderType.LEGACY),
@@ -168,6 +168,9 @@ internal object FormatInfoWrapper {
         if (System.currentTimeMillis() < mUrlClientPausedUntilMs) {
             return null
         }
+        if (mUrlWinner == null) { // the winner of a previous run (remembered by the app for ~24 h)
+            mUrlWinner = URL_CLIENTS.firstOrNull { it.first.name == UrlFormatsOption.savedWinner }
+        }
         val order = listOfNotNull(mUrlWinner) + URL_CLIENTS.filter { it != mUrlWinner }
         val roundStart = System.currentTimeMillis()
         for (client in order) {
@@ -192,6 +195,9 @@ internal object FormatInfoWrapper {
             UrlFormatsOption.listener?.invoke(client.first.name + (if (prefetch) " (prefetch)" else "") + ": " +
                 (if (timeout) "timeout" else describe(result)), hasUrls, System.currentTimeMillis() - start)
             if (hasUrls) {
+                if (mUrlWinner != client) {
+                    UrlFormatsOption.onWinner?.invoke(client.first.name)
+                }
                 mUrlWinner = client
                 mUrlClientFailures = 0
                 mRecent[videoId] = Pair(System.currentTimeMillis(), result!!)
@@ -199,6 +205,7 @@ internal object FormatInfoWrapper {
             }
             if (client == mUrlWinner) {
                 mUrlWinner = null // stopped working: probe the others
+                UrlFormatsOption.savedWinner = null
             }
             if (mUrlWinner != null) {
                 break // a known good client failed for this video only: don't probe everything again

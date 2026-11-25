@@ -18,6 +18,20 @@ object UrlFormatsOption {
     var listener: ((String, Boolean, Long) -> Unit)? = null
 
     /**
+     * Client name that gave direct URLs in a previous run (tried first), set by the app
+     */
+    @JvmStatic
+    @Volatile
+    var savedWinner: String? = null
+
+    /**
+     * Called with the client name when a (new) client gives direct URLs, so the app can remember it
+     */
+    @JvmStatic
+    @Volatile
+    var onWinner: ((String) -> Unit)? = null
+
+    /**
      * The URL client gets this long, then the normal client chain is used
      */
     @JvmStatic

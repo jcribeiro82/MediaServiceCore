@@ -77,13 +77,17 @@ internal object FormatInfoWrapper {
                 val cachedFormatInfo = getCachedFormatInfo(videoId)
 
                 if (cachedFormatInfo != null) {
+                    UrlFormatsOption.lastReused = true
                     return cachedFormatInfo
                 }
+                UrlFormatsOption.lastReused = false
 
                 checkSigned()
 
-                val urlInfo = if (UrlFormatsOption.isEnabled && videoId != mUrlClientSkipVideoId)
-                    recentInfo(videoId) ?: urlFormatsInfo(videoId, clickTrackingParams, false) else null
+                val recent = if (UrlFormatsOption.isEnabled && videoId != mUrlClientSkipVideoId) recentInfo(videoId) else null
+                UrlFormatsOption.lastReused = recent != null
+                val urlInfo = recent ?: if (UrlFormatsOption.isEnabled && videoId != mUrlClientSkipVideoId)
+                    urlFormatsInfo(videoId, clickTrackingParams, false) else null
                 mUrlClientVideoId = if (urlInfo != null) videoId else null
                 val formatInfo = urlInfo ?: firstPlayable(videoId, clickTrackingParams)
 
@@ -246,7 +250,7 @@ internal object FormatInfoWrapper {
      */
     private fun recentInfo(videoId: String): MediaItemFormatInfo? {
         val entry = mRecent[videoId] ?: return null
-        if (System.currentTimeMillis() - entry.first > UrlFormatsOption.recentTtlMs) {
+        if (System.currentTimeMillis() - entry.first > UrlFormatsOption.recentTtlMs || !isSafeToReuse(entry.second)) {
             mRecent.remove(videoId)
             return null
         }
@@ -330,7 +334,37 @@ internal object FormatInfoWrapper {
     }
 
     private fun getCachedFormatInfo(videoId: String?): MediaItemFormatInfo? {
-        return mCachedFormatInfo?.takeIf { videoId != null && it.getVideoId() == videoId && it.isCacheActual() }
+        return mCachedFormatInfo?.takeIf { videoId != null && it.getVideoId() == videoId && it.isCacheActual()
+                && (!UrlFormatsOption.isEnabled || isSafeToReuse(it)) }
+    }
+
+    /**
+     * SmartTubeKids: kept player data is reused only with plain URL formats that stay valid for 30+ more minutes.
+     * SABR answers (per-session streaming config, cookies, PoToken) are never reused: a second SABR playback from kept
+     * data stayed black on the test tablet.
+     */
+    private fun isSafeToReuse(info: MediaItemFormatInfo): Boolean {
+        if (info.containsSabrFormats()) {
+            return false
+        }
+        val url = info.getAdaptiveFormats()?.firstOrNull()?.getUrl() ?: info.getUrlFormats()?.firstOrNull()?.getUrl() ?: return false
+        val expire = Regex("[?&]expire=(\\d+)").find(url)?.groupValues?.get(1)?.toLongOrNull() ?: return true
+        return expire * 1000 - System.currentTimeMillis() > 30 * 60 * 1000L
+    }
+
+    /**
+     * SmartTubeKids: forget the kept player data of a video (a reused answer didn't play)
+     */
+    @JvmStatic
+    fun invalidate(videoId: String?) {
+        synchronized(lock) {
+            if (videoId == null || mCachedFormatInfo?.getVideoId() == videoId) {
+                mCachedFormatInfo = null
+            }
+            if (videoId != null) {
+                mRecent.remove(videoId)
+            }
+        }
     }
 
     private fun setCachedFormatInfo(formatInfo: MediaItemFormatInfo?, clickTrackingParams: String?) {

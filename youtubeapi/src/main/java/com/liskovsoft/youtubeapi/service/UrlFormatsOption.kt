@@ -46,6 +46,21 @@ object UrlFormatsOption {
     var recentTtlMs: Long = 20 * 60 * 1000L
 
     /**
+     * True if the last player data answer was kept/prefetched data (not a fresh request)
+     */
+    @JvmStatic
+    @Volatile
+    var lastReused: Boolean = false
+
+    /**
+     * Forgets the kept player data of a video, so the next request is fresh
+     */
+    @JvmStatic
+    fun invalidate(videoId: String?) {
+        com.liskovsoft.youtubeapi.service.internal.FormatInfoWrapper.invalidate(videoId)
+    }
+
+    /**
      * Fetches the player data of a likely next video in the background (blocking: call off the main thread)
      */
     @JvmStatic
